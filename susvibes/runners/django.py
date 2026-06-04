@@ -15,7 +15,9 @@ from susvibes.runners.base import (
 )
 
 _DJANGO_VERBOSE_RE = re.compile(
-    r"^(test\w+)\s+\([^)]+\)\s+\.\.\.\s+(ok|FAIL|ERROR|skipped)",
+    r"^(test\w+)\s+\([^)]+\)\s*"
+    r"(?:\.\.\.\s+(ok|FAIL|ERROR|skipped)"
+    r"|\n[^\n]+\.\.\.\s+(ok|FAIL|ERROR|skipped))",
     re.MULTILINE,
 )
 
@@ -40,7 +42,8 @@ class DjangoTestAdapter(TestRunnerAdapter):
     def extract_per_test(self, run_logs: str) -> dict[str, TestOutcome]:
         per_test: dict[str, TestOutcome] = {}
         for m in _DJANGO_VERBOSE_RE.finditer(run_logs):
-            name, status = m.group(1), m.group(2)
+            name = m.group(1)
+            status = m.group(2) or m.group(3)
             per_test[name] = _STATUS_MAP[status]
 
         # Supplement from failure/error section headers (always emitted for
@@ -85,7 +88,8 @@ class DjangoTestAdapter(TestRunnerAdapter):
 
         per_test: dict[str, TestOutcome] = {}
         for m in _DJANGO_VERBOSE_RE.finditer(run_logs):
-            name, status = m.group(1), m.group(2)
+            name = m.group(1)
+            status = m.group(2) or m.group(3)
             per_test[name] = _STATUS_MAP[status]
 
         for m in _DJANGO_FAIL_HEADER_RE.finditer(run_logs):

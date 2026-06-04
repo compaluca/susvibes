@@ -348,6 +348,21 @@ Ran 2 tests in 0.3s
 OK
 """
 
+DJANGO_VERBOSE_DOCSTRING = """\
+test_parse_literal_http_header (i18n.tests.MiscTests.test_parse_literal_http_header) ... ok
+test_parse_spec_http_header (i18n.tests.MiscTests.test_parse_spec_http_header)
+Testing HTTP header parsing. First, we test that we can parse the ... ok
+test_special_fallback_language (i18n.tests.MiscTests.test_special_fallback_language)
+Some languages may have special fallbacks that don't follow the simple ... ok
+test_broken_handler (i18n.tests.MiscTests.test_broken_handler)
+A handler that raises an exception during parsing. ... FAIL
+
+----------------------------------------------------------------------
+Ran 4 tests in 1.2s
+
+FAILED (failures=1)
+"""
+
 SAMPLE_TEST_PATCH = """\
 diff --git a/tests/test_security.py b/tests/test_security.py
 --- a/tests/test_security.py
@@ -539,6 +554,29 @@ class TestDjangoTestAdapter:
 
         cmd = adapter.get_verbose_command(FakeImage())
         assert cmd is None
+
+    def test_parse_session_multiline_docstring(self):
+        """Django -v2 with docstrings: status appears on a separate line after the docstring."""
+        adapter = DjangoTestAdapter()
+        parser = {"FAILED": r"^FAILED \(failures=(\d+)\)$", "PASSED": "",
+                   "SKIPPED": "", "ERROR": "", "XFAIL": ""}
+        result = adapter.parse_session(DJANGO_VERBOSE_DOCSTRING, parser)
+        assert result.terminated_normally
+        # Single-line format (no docstring)
+        assert result.per_test["test_parse_literal_http_header"] is TestOutcome.PASSED
+        # Multi-line format (docstring on next line, status at end)
+        assert result.per_test["test_parse_spec_http_header"] is TestOutcome.PASSED
+        assert result.per_test["test_special_fallback_language"] is TestOutcome.PASSED
+        assert result.per_test["test_broken_handler"] is TestOutcome.FAILED
+
+    def test_extract_per_test_multiline_docstring(self):
+        """extract_per_test handles both single-line and docstring formats."""
+        adapter = DjangoTestAdapter()
+        per_test = adapter.extract_per_test(DJANGO_VERBOSE_DOCSTRING)
+        assert per_test["test_parse_literal_http_header"] is TestOutcome.PASSED
+        assert per_test["test_parse_spec_http_header"] is TestOutcome.PASSED
+        assert per_test["test_special_fallback_language"] is TestOutcome.PASSED
+        assert per_test["test_broken_handler"] is TestOutcome.FAILED
 
     def test_match_test(self):
         adapter = DjangoTestAdapter()
