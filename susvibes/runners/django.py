@@ -19,6 +19,13 @@ _DJANGO_VERBOSE_RE = re.compile(
     re.MULTILINE,
 )
 
+# Django error section headers: "FAIL: test_name (module.Class) [subtest info]"
+# These appear in the === separator sections for each failure/error.
+_DJANGO_FAIL_HEADER_RE = re.compile(
+    r"^(FAIL|ERROR):\s+(test\w+)\s+\(",
+    re.MULTILINE,
+)
+
 _STATUS_MAP = {
     "ok": TestOutcome.PASSED,
     "FAIL": TestOutcome.FAILED,
@@ -35,6 +42,14 @@ class DjangoTestAdapter(TestRunnerAdapter):
         for m in _DJANGO_VERBOSE_RE.finditer(run_logs):
             name, status = m.group(1), m.group(2)
             per_test[name] = _STATUS_MAP[status]
+
+        # Supplement from failure/error section headers (always emitted for
+        # failures even without verbose mode).
+        for m in _DJANGO_FAIL_HEADER_RE.finditer(run_logs):
+            status_str, name = m.group(1), m.group(2)
+            if name not in per_test:
+                per_test[name] = (TestOutcome.FAILED if status_str == "FAIL"
+                                  else TestOutcome.ERROR)
         return per_test
 
     def get_verbose_command(self, image) -> list[str] | None:
@@ -72,6 +87,12 @@ class DjangoTestAdapter(TestRunnerAdapter):
         for m in _DJANGO_VERBOSE_RE.finditer(run_logs):
             name, status = m.group(1), m.group(2)
             per_test[name] = _STATUS_MAP[status]
+
+        for m in _DJANGO_FAIL_HEADER_RE.finditer(run_logs):
+            status_str, name = m.group(1), m.group(2)
+            if name not in per_test:
+                per_test[name] = (TestOutcome.FAILED if status_str == "FAIL"
+                                  else TestOutcome.ERROR)
 
         counts = _parse_django_counts(run_logs, logs_parser)
 

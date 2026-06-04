@@ -45,6 +45,27 @@ _DJANGO_OUTPUT_MARKERS = re.compile(
     re.MULTILINE,
 )
 
+# Zope/ztest format: "Total: N tests, M failures, K errors..." or
+# "Ran N tests with M failures, K errors..."
+_ZOPE_OUTPUT_MARKERS = re.compile(
+    r"(?:"
+    r"Total:\s+\d+\s+tests?,\s+\d+\s+failures?"  # Total: N tests, M failures
+    r"|Ran\s+\d+\s+tests?\s+with\s+\d+\s+failures?"  # Ran N tests with M failures
+    r"|Tearing down left over layers"  # Zope layer teardown
+    r"|Set up\s+\S+\s+in\s+[\d.]+"  # Set up Layer in N.NNN seconds
+    r")",
+    re.MULTILINE,
+)
+
+# Zope summary line regex for count extraction
+_ZOPE_SUMMARY_RE = re.compile(
+    r"(?:Total:|Ran)\s+(\d+)\s+tests?,?\s+"
+    r"(?:with\s+)?(\d+)\s+failures?,?\s*"
+    r"(\d+)\s+errors?",
+)
+
+_ZOPE_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
 
 class FallbackAdapter(TestRunnerAdapter):
     """Pass-through adapter that keeps the existing count-based logic.
@@ -93,11 +114,39 @@ class FallbackAdapter(TestRunnerAdapter):
                     counts[status] = 0
 
         if not any_match:
+            # Try Zope/ztest summary format before declaring CRASH
+            clean_logs = _ZOPE_ANSI_RE.sub("", run_logs)
+            zope_counts = _parse_zope_counts(clean_logs)
+            if zope_counts is not None:
+                return SessionResult(
+                    abort_reason=AbortReason.NORMAL, per_test={},
+                    counts=zope_counts,
+                )
             return SessionResult(abort_reason=AbortReason.CRASH)
 
         return SessionResult(
             abort_reason=AbortReason.NORMAL, per_test={}, counts=counts
         )
+
+
+def _parse_zope_counts(clean_logs: str) -> dict[str, int] | None:
+    """Parse Zope/ztest summary format into counts dict.
+
+    Handles both per-layer summaries and the final "Total:" line.
+    Returns None if no Zope summary was found.
+    """
+    # Look for the final "Total:" line or individual "Ran N tests with..." lines
+    all_matches = _ZOPE_SUMMARY_RE.findall(clean_logs)
+    if not all_matches:
+        return None
+
+    # Use the last match (which is typically the "Total:" line)
+    total_tests, failures, errors = all_matches[-1]
+    return {
+        "FAILED": int(failures),
+        "ERROR": int(errors),
+        "PASSED": int(total_tests) - int(failures) - int(errors),
+    }
 
 
 def detect_runner(dockerfile: str) -> TestRunnerAdapter:
@@ -160,6 +209,7 @@ def detect_runner_from_output(
 
     pytest_score = len(_PYTEST_OUTPUT_MARKERS.findall(clean_sample))
     django_score = len(_DJANGO_OUTPUT_MARKERS.findall(clean_sample))
+    zope_score = len(_ZOPE_OUTPUT_MARKERS.findall(clean_sample))
 
     if pytest_score >= 3 and pytest_score > django_score:
         return PytestAdapter()
@@ -171,5 +221,10 @@ def detect_runner_from_output(
         return PytestAdapter()
     if django_score >= 1:
         return DjangoTestAdapter()
+
+    # Zope/ztest detection — stays as FallbackAdapter but the Zope count
+    # parsing in parse_session will now handle it correctly
+    if zope_score >= 2:
+        return FallbackAdapter()
 
     return FallbackAdapter()

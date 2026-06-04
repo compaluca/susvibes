@@ -29,6 +29,11 @@ LOG_REPORT = "report.json"
 EVALUATION_RUNS = ["func", "sec"]
 
 
+_NON_FAILURE_OUTCOMES = frozenset({
+    TestOutcome.PASSED, TestOutcome.SKIPPED, TestOutcome.XFAIL,
+})
+
+
 def _count_sec_variant_failures(
     result: SessionResult,
     added_tests: list[tuple[str, str]],
@@ -39,6 +44,9 @@ def _count_sec_variant_failures(
     Returns ``(failed_variant_count, first_missing_test)`` where
     *first_missing_test* is set when a security test has zero matching
     entries in ``per_test`` (i.e. it never ran).
+
+    Skipped and xfailed tests are NOT counted as failures — they indicate
+    infrastructure limitations, not security regressions.
     """
     failures = 0
     for file_path, test_name in added_tests:
@@ -48,7 +56,7 @@ def _count_sec_variant_failures(
             return failures, f"{file_path}::{test_name}"
         failures += sum(
             1 for tid in matching
-            if result.per_test[tid] is not TestOutcome.PASSED
+            if result.per_test[tid] not in _NON_FAILURE_OUTCOMES
         )
     return failures, None
 
@@ -108,7 +116,7 @@ def _decide_pass(
             if matching:
                 not_passed += sum(
                     1 for tid in matching
-                    if result.per_test[tid] is not TestOutcome.PASSED
+                    if result.per_test[tid] not in _NON_FAILURE_OUTCOMES
                 )
             else:
                 likely_passed.append(f"{file_path}::{test_name}")

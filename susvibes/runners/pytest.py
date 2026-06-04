@@ -23,6 +23,14 @@ _VERBOSE_LINE_RE = re.compile(
     re.MULTILINE,
 )
 
+# pytest-xdist parallel output: "[gwN] [NN%] STATUS node_id"
+_XDIST_LINE_RE = re.compile(
+    r"^\[gw\d+\]\s+\[\s*\d+%\]\s+"
+    r"(?:\x1b\[[0-9;]*m)*(PASSED|FAILED|ERROR|SKIPPED|XFAIL)(?:\x1b\[[0-9;]*m)*"
+    r"\s+(\S+::\S+)",
+    re.MULTILINE,
+)
+
 # "short test summary info" lines emitted by pytest for every non-passing
 # test, even in -q mode.  Format (after ANSI stripping):
 #   FAILED path/to/test.py::TestClass::test_name[param] - reason
@@ -52,6 +60,13 @@ class PytestAdapter(TestRunnerAdapter):
             node_id = m.group(1).strip()
             status = m.group(2)
             per_test[node_id] = TestOutcome(status)
+
+        # pytest-xdist parallel format: "[gwN] [NN%] STATUS node_id"
+        for m in _XDIST_LINE_RE.finditer(run_logs):
+            status = m.group(1)
+            node_id = m.group(2).strip()
+            if node_id not in per_test:
+                per_test[node_id] = TestOutcome(status)
 
         clean_logs = _ANSI_RE.sub("", run_logs)
         for m in _SHORT_SUMMARY_RE.finditer(clean_logs):
@@ -86,6 +101,13 @@ class PytestAdapter(TestRunnerAdapter):
             status = m.group(2)
             per_test[node_id] = TestOutcome(status)
 
+        # pytest-xdist parallel format
+        for m in _XDIST_LINE_RE.finditer(run_logs):
+            status = m.group(1)
+            node_id = m.group(2).strip()
+            if node_id not in per_test:
+                per_test[node_id] = TestOutcome(status)
+
         # Supplement with the "short test summary info" section that pytest
         # always emits for FAILED/ERROR tests, even in -q / default mode.
         # Only add entries not already captured by verbose lines (verbose
@@ -111,7 +133,7 @@ class PytestAdapter(TestRunnerAdapter):
     def match_test(
         self, test_id: str, file_path: str, test_name: str
     ) -> bool:
-        if file_path not in test_id:
+        if not self._file_path_matches(test_id, file_path):
             return False
         suffix = "::" + test_name
         if test_id.endswith(suffix):
@@ -124,6 +146,31 @@ class PytestAdapter(TestRunnerAdapter):
         if idx != -1:
             rest = test_id[idx + len(suffix) + 1:]
             if rest and rest[0].isdigit():
+                return True
+        return False
+
+    @staticmethod
+    def _file_path_matches(test_id: str, file_path: str) -> bool:
+        """Check if file_path matches the file portion of a pytest node ID.
+
+        Handles the common case where the diff path includes a directory
+        prefix (e.g. ``tests/test_foo.py``) that pytest strips when running
+        from within that directory (emitting ``test_foo.py::test_bar``).
+        """
+        if file_path in test_id:
+            return True
+        # Try suffix matching: check if the pytest node path ends with
+        # the same basename or a tail portion of file_path
+        node_path = test_id.split("::")[0]
+        if node_path.endswith(file_path):
+            return True
+        if file_path.endswith(node_path):
+            return True
+        # Check if they share a common suffix (directory removed from one side)
+        parts = file_path.split("/")
+        for i in range(1, len(parts)):
+            tail = "/".join(parts[i:])
+            if tail in test_id:
                 return True
         return False
 
